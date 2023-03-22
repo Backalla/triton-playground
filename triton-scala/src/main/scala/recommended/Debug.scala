@@ -13,9 +13,14 @@ import scala.io.Source
 import scala.util.Success
 import scala.util.control.Breaks.{break, breakable}
 
+
 case class RequestSingle(params: Map[String, Seq[String]])
 
-case class InferenceResponse(promise: Promise[Float], request: RequestSingle)
+case class InferenceResponse(promise: Promise[Float], request: RequestSingle,var startTime: Long = System.nanoTime()){
+  def resetTime(): Unit = {
+    startTime = System.nanoTime()
+  }
+}
 
 trait TritonModel {
   val modelName: String
@@ -115,8 +120,11 @@ trait TritonModel {
         val probability = extractOutputFromResponse(response)
         val inferenceResponse = futures(userp)
         inferenceResponse.promise.tryComplete(Success(probability))
+        print(s"Forward pass took: ${Duration(System.nanoTime() - inferenceResponse.startTime, NANOSECONDS).toMillis}ms")
+        inferenceResponse.resetTime()
         FAIL_IF_ERR(TRITONSERVER_InferenceResponseDelete(response), "deleting inference response")
         futures.remove(userp)
+        print(s"Deleting response took: ${Duration(System.nanoTime() - inferenceResponse.startTime, NANOSECONDS).toMillis}ms")
       }
     }
   }
@@ -178,6 +186,14 @@ trait TritonModel {
     println(buffer.limit(byteSize.get).getString)
     FAIL_IF_ERR(TRITONSERVER_MessageDelete(modelMetadataMessage), "deleting status metadata")
   }
+
+  def timed[R](thing: String)(block: => R): R = {
+    val t0 = System.nanoTime()
+    val result = block
+    val duration = System.nanoTime() - t0
+    println(s"$thing took ${duration.millis}ms")
+    result
+  }
 }
 
 class TritonLightGbm(override val modelName: String, override val modelVersion: String, modelRepoPath: Path) extends TritonModel {
@@ -188,22 +204,22 @@ class TritonLightGbm(override val modelName: String, override val modelVersion: 
 
   val inputTensorName = "input__0"
   val outputTensorName = "output__0"
-
-
-  val serverOptions = new TRITONSERVER_ServerOptions(null)
-  FAIL_IF_ERR(TRITONSERVER_ServerOptionsNew(serverOptions), "creating server options")
-  FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetModelRepositoryPath(serverOptions, modelRepoPath.toString), "Setting model repo path")
-  FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetLogVerbose(serverOptions, 0), "Setting verbose logging level")
-  FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetBackendDirectory(serverOptions,"/opt/tritonserver/backends"), "setting backend directory")
-  FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetRepoAgentDirectory(serverOptions, "/opt/tritonserver/repoagents"), "setting repository agent directory")
-  FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetStrictModelConfig(serverOptions, true),"setting strict model configuration")
-
-
-  //  Initialise Server
   val server = new TRITONSERVER_Server(null);
-  FAIL_IF_ERR(TRITONSERVER_ServerNew(server, serverOptions), "creating server")
 
-  FAIL_IF_ERR(TRITONSERVER_ServerOptionsDelete(serverOptions),"deleting server options")
+
+  timed("Server initialisation") {
+    val serverOptions = new TRITONSERVER_ServerOptions(null)
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsNew(serverOptions), "creating server options")
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetModelRepositoryPath(serverOptions, modelRepoPath.toString), "Setting model repo path")
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetLogVerbose(serverOptions, 0), "Setting verbose logging level")
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetBackendDirectory(serverOptions, "/opt/tritonserver/backends"), "setting backend directory")
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetRepoAgentDirectory(serverOptions, "/opt/tritonserver/repoagents"), "setting repository agent directory")
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetStrictModelConfig(serverOptions, true), "setting strict model configuration")
+    //  Initialise Server
+    FAIL_IF_ERR(TRITONSERVER_ServerNew(server, serverOptions), "creating server")
+
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsDelete(serverOptions), "deleting server options")
+  }
 
   waitTillReady(server)
   printServerMetadata(server)
@@ -257,30 +273,33 @@ class TritonLightGbm(override val modelName: String, override val modelVersion: 
 
   def makePredictions(request: RequestSingle, timeoutNano: Long): Future[Float] = {
     val retPromise =  Promise[Float]()
-    val irequest = getInferenceRequestObj(randomUUID().toString)
+    val irequest = timed("Initialising irequest") {
+      getInferenceRequestObj(randomUUID().toString)
+    }
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestAppendInputData(irequest, inputTensorName,
       inputDataBase,inputDataSize,requested_memory_type,0),s"assigning $inputTensorName data")
 
-    val inputRow = supportedFeatures.map(
-      featName => try {
-        val values = request.params.get(featName)
-        if (values.isEmpty || values.get.isEmpty || values.get.head == null) {
-          Float.NaN
-        } else {
-          values.get.head.toFloat
+    timed("Creating input data") {
+      val inputRow = supportedFeatures.map(
+        featName => try {
+          val values = request.params.get(featName)
+          if (values.isEmpty || values.get.isEmpty || values.get.head == null) {
+            Float.NaN
+          } else {
+            values.get.head.toFloat
+          }
+        } catch {
+          case e: Exception =>
+            throw new IllegalArgumentException(s"Invalid value '${request.params.get(featName).map(_.head)}' for feature '$featName': ${e.getClass.getSimpleName}")
         }
-      } catch {
-        case e: Exception =>
-          throw new IllegalArgumentException(s"Invalid value '${request.params.get(featName).map(_.head)}' for feature '$featName': ${e.getClass.getSimpleName}")
-      }
-    )
+      )
 
-    addInputData(inputRow)
+      addInputData(inputRow)
+    }
     val inferenceResponse = InferenceResponse(retPromise,request)
-    futures.put(irequest, inferenceResponse)
 
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestSetResponseCallback(irequest, allocator, null, inferResponseComplete, irequest), "setting response callback")
-
+    futures.put(irequest, inferenceResponse)
     FAIL_IF_ERR(TRITONSERVER_ServerInferAsync(server, irequest, null /* trace */),"running inference")
 
     retPromise.future
