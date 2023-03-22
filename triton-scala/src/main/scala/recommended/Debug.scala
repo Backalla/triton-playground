@@ -210,6 +210,8 @@ class TritonLightGbm(override val modelName: String, override val modelVersion: 
   printModelMetadata(server)
 
   val allocator = new TRITONSERVER_ResponseAllocator(null)
+  FAIL_IF_ERR(TRITONSERVER_ResponseAllocatorNew(allocator, responseAlloc, responseRelease, null), "creating response allocator")
+
 
 
   val inputData = Array(new FloatPointer(supportedFeatures.length.toLong))
@@ -220,9 +222,6 @@ class TritonLightGbm(override val modelName: String, override val modelVersion: 
 
 
   def getInferenceRequestObj(reqId: String): TRITONSERVER_InferenceRequest = {
-
-    FAIL_IF_ERR(TRITONSERVER_ResponseAllocatorNew(allocator, responseAlloc, responseRelease, null), "creating response allocator")
-
     val irequest = new TRITONSERVER_InferenceRequest()
 
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestNew(irequest, server, modelName, modelVersion.toLong), "creating inference request")
