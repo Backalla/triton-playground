@@ -191,7 +191,7 @@ trait TritonModel {
     val t0 = System.nanoTime()
     val result = block
     val duration = System.nanoTime() - t0
-    println(s"$thing took ${duration.millis}ms")
+    println(s"$thing took ${duration.nano.toMillis} ms")
     result
   }
 }
