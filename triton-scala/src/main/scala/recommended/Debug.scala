@@ -8,7 +8,7 @@ import java.nio.file.Path
 import java.util.UUID.randomUUID
 import scala.collection.mutable
 import scala.concurrent.{Await, Future, Promise}
-import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration, NANOSECONDS}
+import scala.concurrent.duration.{Duration, DurationInt, DurationLong, FiniteDuration, NANOSECONDS}
 import scala.io.Source
 import scala.util.Success
 import scala.util.control.Breaks.{break, breakable}
@@ -288,7 +288,7 @@ class TritonLightGbm(override val modelName: String, override val modelVersion: 
   }
 
 
-  protected def predictSync(request: RequestSingle): Float = {
+  def predictSync(request: RequestSingle): Float = {
     val timeout = 5000.millis
     //    val response = makePredictions(request, timeout.toNanos)
     //    response
@@ -317,6 +317,23 @@ object Debug extends App {
   val modelVersion = 1L
   val model = new TritonLightGbm(modelName, modelVersion.toString, modelDir)
 
+  val testCases = (0 until 100).map(i => {
+    RequestSingle(Map(s"useless_idx_$i" -> Seq("0")))
+  })
+  testCases.foreach(request => {
+    val (duration, result) = timed {
+      model.predictSync(request)
+    }
+    println(s"Got prediction $result in ${duration.toMillis}ms")
+  })
+
   println("Reached the end!!")
+
+  def timed[R](block: => R): (FiniteDuration, R) = {
+    val t0 = System.nanoTime()
+    val result = block
+    val duration = System.nanoTime() - t0
+    (duration.nano, result)
+  }
 
 }
