@@ -357,8 +357,9 @@ class TritonTF(override val modelName: String, override val modelVersion: String
   val input1TensorName = "input_1"
   val input2TensorName = "input_2"
   val outputTensorName = "output_1"
-  val input1Data = Array(new FloatPointer(1))
-  val input2Data = Array(new FloatPointer(1))
+  val inputDtype = TRITONSERVER_TYPE_INT64
+  val input1Data = Array(new IntPointer(1))
+  val input2Data = Array(new IntPointer(1))
   val input1DataPointer = input1Data(0).getPointer(classOf[BytePointer])
   val input2DataPointer = input2Data(0).getPointer(classOf[BytePointer])
   val inputDataSize = input1DataPointer.limit()
@@ -376,8 +377,8 @@ class TritonTF(override val modelName: String, override val modelVersion: String
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestSetReleaseCallback(irequest, inferRequestComplete, null), "setting request release callback")
 
     val inputShape = Array(1L, 1L)
-    FAIL_IF_ERR(TRITONSERVER_InferenceRequestAddInput(irequest, input1TensorName, TRITONSERVER_TYPE_FP32, inputShape,inputShape.length), s"setting input $input1TensorName meta-data for the request")
-    FAIL_IF_ERR(TRITONSERVER_InferenceRequestAddInput(irequest, input2TensorName, TRITONSERVER_TYPE_FP32, inputShape,inputShape.length), s"setting input $input1TensorName meta-data for the request")
+    FAIL_IF_ERR(TRITONSERVER_InferenceRequestAddInput(irequest, input1TensorName, inputDtype, inputShape,inputShape.length), s"setting input $input1TensorName meta-data for the request")
+    FAIL_IF_ERR(TRITONSERVER_InferenceRequestAddInput(irequest, input2TensorName, inputDtype, inputShape,inputShape.length), s"setting input $input1TensorName meta-data for the request")
 
 
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestAddRequestedOutput(irequest, outputTensorName), "requesting output probability for the request")
@@ -385,7 +386,7 @@ class TritonTF(override val modelName: String, override val modelVersion: String
 
   }
 
-  def addInputData(inputRow: Seq[Float]): Unit = {
+  def addInputData(inputRow: Seq[Int]): Unit = {
     input1Data(0).put(inputRow(0))
     input2Data(0).put(inputRow(1))
   }
@@ -405,9 +406,9 @@ class TritonTF(override val modelName: String, override val modelVersion: String
         featName => try {
           val values = request.params.get(featName)
           if (values.isEmpty || values.get.isEmpty || values.get.head == null) {
-            Float.NaN
+            42
           } else {
-            values.get.head.toFloat
+            values.get.head.toInt
           }
         } catch {
           case e: Exception =>
