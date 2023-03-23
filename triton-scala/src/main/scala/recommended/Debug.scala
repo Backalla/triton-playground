@@ -328,21 +328,132 @@ class TritonLightGbm(override val modelName: String, override val modelVersion: 
 
 }
 
+class TritonTF(override val modelName: String, override val modelVersion: String, modelRepoPath: Path) extends TritonModel {
+  val server = new TRITONSERVER_Server(null);
+
+
+  timed("Server initialisation") {
+    val serverOptions = new TRITONSERVER_ServerOptions(null)
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsNew(serverOptions), "creating server options")
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetModelRepositoryPath(serverOptions, modelRepoPath.toString), "Setting model repo path")
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetLogVerbose(serverOptions, 0), "Setting verbose logging level")
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetBackendDirectory(serverOptions, "/opt/tritonserver/backends"), "setting backend directory")
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetRepoAgentDirectory(serverOptions, "/opt/tritonserver/repoagents"), "setting repository agent directory")
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetStrictModelConfig(serverOptions, true), "setting strict model configuration")
+    //  Initialise Server
+    FAIL_IF_ERR(TRITONSERVER_ServerNew(server, serverOptions), "creating server")
+
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsDelete(serverOptions), "deleting server options")
+  }
+
+  waitTillReady(server)
+  printServerMetadata(server)
+  printModelMetadata(server)
+
+  val allocator = new TRITONSERVER_ResponseAllocator(null)
+  FAIL_IF_ERR(TRITONSERVER_ResponseAllocatorNew(allocator, responseAlloc, responseRelease, null), "creating response allocator")
+
+
+  val input1TensorName = "input_1"
+  val input2TensorName = "input_2"
+  val outputTensorName = "output_1"
+  val input1Data = Array(new FloatPointer(1))
+  val input2Data = Array(new FloatPointer(1))
+  val input1DataPointer = input1Data(0).getPointer(classOf[BytePointer])
+  val input2DataPointer = input2Data(0).getPointer(classOf[BytePointer])
+  val inputDataSize = input1DataPointer.limit()
+  val input1DataBase = input1DataPointer
+  val input2DataBase = input2DataPointer
+
+  def getInferenceRequestObj(reqId: String): TRITONSERVER_InferenceRequest = {
+    val irequest = new TRITONSERVER_InferenceRequest()
+
+    FAIL_IF_ERR(TRITONSERVER_InferenceRequestNew(irequest, server, modelName, modelVersion.toLong), "creating inference request")
+
+    // TODO: Find better id
+    FAIL_IF_ERR(TRITONSERVER_InferenceRequestSetId(irequest, reqId), "setting ID for the request")
+
+    FAIL_IF_ERR(TRITONSERVER_InferenceRequestSetReleaseCallback(irequest, inferRequestComplete, null), "setting request release callback")
+
+    val inputShape = Array(1L, 1L)
+    FAIL_IF_ERR(TRITONSERVER_InferenceRequestAddInput(irequest, input1TensorName, TRITONSERVER_TYPE_FP32, inputShape,inputShape.length), s"setting input $input1TensorName meta-data for the request")
+    FAIL_IF_ERR(TRITONSERVER_InferenceRequestAddInput(irequest, input2TensorName, TRITONSERVER_TYPE_FP32, inputShape,inputShape.length), s"setting input $input1TensorName meta-data for the request")
+
+
+    FAIL_IF_ERR(TRITONSERVER_InferenceRequestAddRequestedOutput(irequest, outputTensorName), "requesting output probability for the request")
+    irequest
+
+  }
+
+  def addInputData(inputRow: Seq[Float]): Unit = {
+    input1Data(0).put(inputRow(0))
+    input2Data(0).put(inputRow(1))
+  }
+
+  def makePredictions(request: RequestSingle, timeoutNano: Long): Future[Float] = {
+    val retPromise =  Promise[Float]()
+    val irequest = timed("Initialising irequest") {
+      getInferenceRequestObj(randomUUID().toString)
+    }
+    FAIL_IF_ERR(TRITONSERVER_InferenceRequestAppendInputData(irequest, input1TensorName,
+      input1DataBase,inputDataSize,requested_memory_type,0),s"assigning $input1TensorName data")
+    FAIL_IF_ERR(TRITONSERVER_InferenceRequestAppendInputData(irequest, input2TensorName,
+      input2DataBase,inputDataSize,requested_memory_type,0),s"assigning $input2TensorName data")
+
+    timed("Creating input data") {
+      val inputRow = supportedFeatures.map(
+        featName => try {
+          val values = request.params.get(featName)
+          if (values.isEmpty || values.get.isEmpty || values.get.head == null) {
+            Float.NaN
+          } else {
+            values.get.head.toFloat
+          }
+        } catch {
+          case e: Exception =>
+            throw new IllegalArgumentException(s"Invalid value '${request.params.get(featName).map(_.head)}' for feature '$featName': ${e.getClass.getSimpleName}")
+        }
+      )
+
+      addInputData(inputRow)
+    }
+    val inferenceResponse = InferenceResponse(retPromise,request)
+
+    FAIL_IF_ERR(TRITONSERVER_InferenceRequestSetResponseCallback(irequest, allocator, null, inferResponseComplete, irequest), "setting response callback")
+    futures.put(irequest, inferenceResponse)
+    FAIL_IF_ERR(TRITONSERVER_ServerInferAsync(server, irequest, null /* trace */),"running inference")
+
+    retPromise.future
+  }
+
+
+  def predictSync(request: RequestSingle): Float = {
+    val timeout = 5000.millis
+    //    val response = makePredictions(request, timeout.toNanos)
+    //    response
+    Await.result(makePredictions(request,timeout.toNanos),timeout)
+  }
+
+  def supportedFeatures: Seq[String] = {
+    Seq("input_1","input_2")
+  }
+}
+
 object Debug extends App {
   println(s"Running Triton Test")
   val modelDir = Path.of("/var/lib/recommended/models/")
-  val modelName = "sample_lightgbm"
+  val modelName = "sample_tf"
   val modelVersion = 1L
   val model = new TritonLightGbm(modelName, modelVersion.toString, modelDir)
 
   val testCases = (0 until 100).map(i => {
-    RequestSingle(Map(s"useless_idx_$i" -> Seq("0")))
+    RequestSingle(Map("input_1" -> Seq("2"), "input_2" -> Seq("5")))
   })
   testCases.foreach(request => {
     val (duration, result) = timed {
       model.predictSync(request)
     }
-    println(s"Got prediction $result in ${duration.toMillis}ms")
+    println(s"\n------Got prediction $result in ${duration.toMillis}ms")
   })
 
   println("Reached the end!!")
