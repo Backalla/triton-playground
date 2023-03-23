@@ -358,8 +358,8 @@ class TritonTF(override val modelName: String, override val modelVersion: String
   val input2TensorName = "input_2"
   val outputTensorName = "output_1"
   val inputDtype = TRITONSERVER_TYPE_INT64
-  val input1Data = Array(new IntPointer(1))
-  val input2Data = Array(new IntPointer(1))
+  val input1Data = Array(new IntPointer(1L))
+  val input2Data = Array(new IntPointer(1L))
   val input1DataPointer = input1Data(0).getPointer(classOf[BytePointer])
   val input2DataPointer = input2Data(0).getPointer(classOf[BytePointer])
   val inputDataSize = input1DataPointer.limit()
