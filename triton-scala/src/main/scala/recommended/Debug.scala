@@ -444,7 +444,7 @@ object Debug extends App {
   val modelDir = Path.of("/var/lib/recommended/models/")
   val modelName = "sample_tf"
   val modelVersion = 1L
-  val model = new TritonLightGbm(modelName, modelVersion.toString, modelDir)
+  val model = new TritonTF(modelName, modelVersion.toString, modelDir)
 
   val testCases = (0 until 100).map(i => {
     RequestSingle(Map("input_1" -> Seq("2"), "input_2" -> Seq("5")))
