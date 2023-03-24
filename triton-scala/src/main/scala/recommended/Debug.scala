@@ -16,7 +16,7 @@ import scala.util.control.Breaks.{break, breakable}
 
 case class RequestSingle(params: Map[String, Seq[String]]){
   override def toString: String = {
-    params.take(4).map(kv => s"${kv._1}: ${kv._2.head}").mkString(",")
+    params.take(4).map(kv => s"${kv._1}:${kv._2.head}").mkString(", ")
   }
 }
 
@@ -140,7 +140,7 @@ abstract class TritonModel {
         val inferenceResponse = futures(userp)
         inferenceResponse.promise.tryComplete(Success(probability))
         print(s"Forward pass took: ${Duration(System.nanoTime() - inferenceResponse.startTime, NANOSECONDS).toMillis}ms")
-        FAIL_IF_ERR(TRITONSERVER_InferenceResponseDelete(response), "deleting inference response")
+//        FAIL_IF_ERR(TRITONSERVER_InferenceResponseDelete(response), "deleting inference response")
         futures.remove(userp)
       }
     }
@@ -352,7 +352,7 @@ class TritonTF(val modelName: String, val modelVersion: String, val modelRepoPat
 
     val inputShape = Array(1L, 1L)
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestAddInput(irequest, input1TensorName, inputDtype, inputShape,inputShape.length), s"setting input $input1TensorName meta-data for the request")
-    FAIL_IF_ERR(TRITONSERVER_InferenceRequestAddInput(irequest, input2TensorName, inputDtype, inputShape,inputShape.length), s"setting input $input1TensorName meta-data for the request")
+    FAIL_IF_ERR(TRITONSERVER_InferenceRequestAddInput(irequest, input2TensorName, inputDtype, inputShape,inputShape.length), s"setting input $input2TensorName meta-data for the request")
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestAddRequestedOutput(irequest, outputTensorName), "requesting output probability for the request")
     irequest
 
