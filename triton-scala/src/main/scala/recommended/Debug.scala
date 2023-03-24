@@ -14,7 +14,11 @@ import scala.util.Success
 import scala.util.control.Breaks.{break, breakable}
 
 
-case class RequestSingle(params: Map[String, Seq[String]])
+case class RequestSingle(params: Map[String, Seq[String]]){
+  def toString: String = {
+    params.take(4).map(kv => s"${kv._1}: ${kv._2.head}").mkString(",")
+  }
+}
 
 case class InferenceResponse(promise: Promise[Float], request: RequestSingle, startTime: Long = System.nanoTime())
 
@@ -443,7 +447,7 @@ object Debug extends App {
     val result = model.timed("Doing inference") {
       model.predictSync(request)
     }
-    println(s"\n------Got prediction $result for input ${request.params.take(4)}..")
+    println(s"\n------Got prediction $result for input ${request.toString}..")
   })
 
   println("Reached the end!!")
