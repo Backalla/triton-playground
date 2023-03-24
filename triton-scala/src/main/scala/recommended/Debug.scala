@@ -16,15 +16,12 @@ import scala.util.control.Breaks.{break, breakable}
 
 case class RequestSingle(params: Map[String, Seq[String]])
 
-case class InferenceResponse(promise: Promise[Float], request: RequestSingle,var startTime: Long = System.nanoTime()){
-  def resetTime(): Unit = {
-    startTime = System.nanoTime()
-  }
-}
+case class InferenceResponse(promise: Promise[Float], request: RequestSingle, startTime: Long = System.nanoTime())
 
-trait TritonModel {
+abstract class TritonModel {
   val modelName: String
   val modelVersion: String
+  val modelRepoPath: Path
   val live: Array[Boolean] = Array(false)
   def isLive: Boolean =  live(0)
   val ready: Array[Boolean] = Array(false)
@@ -34,6 +31,24 @@ trait TritonModel {
   val responseRelease = new ResponseRelease();
   val inferRequestComplete = new InferRequestComplete();
   val inferResponseComplete = new InferResponseComplete();
+
+  val server = new TRITONSERVER_Server(null);
+  val allocator = new TRITONSERVER_ResponseAllocator(null)
+
+
+  timed("Server initialisation") {
+    val serverOptions = new TRITONSERVER_ServerOptions(null)
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsNew(serverOptions), "creating server options")
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetModelRepositoryPath(serverOptions, modelRepoPath.toString), "Setting model repo path")
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetLogVerbose(serverOptions, 0), "Setting verbose logging level")
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetBackendDirectory(serverOptions, "/opt/tritonserver/backends"), "setting backend directory")
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetRepoAgentDirectory(serverOptions, "/opt/tritonserver/repoagents"), "setting repository agent directory")
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetStrictModelConfig(serverOptions, false), "setting strict model configuration")
+    //  Initialise Server
+    FAIL_IF_ERR(TRITONSERVER_ServerNew(server, serverOptions), "creating server")
+    FAIL_IF_ERR(TRITONSERVER_ServerOptionsDelete(serverOptions), "deleting server options")
+    FAIL_IF_ERR(TRITONSERVER_ResponseAllocatorNew(allocator, responseAlloc, responseRelease, null), "creating response allocator")
+  }
 
   val futures = new mutable.HashMap[Pointer, InferenceResponse]()
 
@@ -121,10 +136,8 @@ trait TritonModel {
         val inferenceResponse = futures(userp)
         inferenceResponse.promise.tryComplete(Success(probability))
         print(s"Forward pass took: ${Duration(System.nanoTime() - inferenceResponse.startTime, NANOSECONDS).toMillis}ms")
-        inferenceResponse.resetTime()
         FAIL_IF_ERR(TRITONSERVER_InferenceResponseDelete(response), "deleting inference response")
         futures.remove(userp)
-        print(s"Deleting response took: ${Duration(System.nanoTime() - inferenceResponse.startTime, NANOSECONDS).toMillis}ms")
       }
     }
   }
@@ -133,7 +146,6 @@ trait TritonModel {
     println("Failure: " + message)
     System.exit(1)
   }
-
 
   def FAIL_IF_ERR(err: TRITONSERVER_Error, message: String): Unit = {
     if (err != null) {
@@ -187,6 +199,19 @@ trait TritonModel {
     FAIL_IF_ERR(TRITONSERVER_MessageDelete(modelMetadataMessage), "deleting status metadata")
   }
 
+  def getInferenceRequestObj(reqId: String): TRITONSERVER_InferenceRequest
+
+  def predictSync(request: RequestSingle): Float
+
+  def supportedFeatures: Seq[String]
+
+  def getOutputSpaceSize: Int
+
+  def shutdown(): Unit = {
+    FAIL_IF_ERR(TRITONSERVER_ResponseAllocatorDelete(allocator), "deleting response allocator")
+    FAIL_IF_ERR(TRITONSERVER_ServerDelete(server), "deleting the server")
+  }
+
   def timed[R](thing: String)(block: => R): R = {
     val t0 = System.nanoTime()
     val result = block
@@ -196,52 +221,27 @@ trait TritonModel {
   }
 }
 
-class TritonLightGbm(override val modelName: String, override val modelVersion: String, modelRepoPath: Path) extends TritonModel {
+class TritonLightGbm(val modelName: String, val modelVersion: String, val modelRepoPath: Path) extends TritonModel {
 
   val modelFile = modelRepoPath.resolve(s"$modelName/$modelVersion/model.txt")
   val modelConfigPath = modelRepoPath.resolve(s"$modelName/config.pbtxt")
   val modelString = getModelString
 
-  val inputTensorName = "input__0"
-  val outputTensorName = "output__0"
-  val server = new TRITONSERVER_Server(null);
-
-
-  timed("Server initialisation") {
-    val serverOptions = new TRITONSERVER_ServerOptions(null)
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsNew(serverOptions), "creating server options")
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetModelRepositoryPath(serverOptions, modelRepoPath.toString), "Setting model repo path")
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetLogVerbose(serverOptions, 0), "Setting verbose logging level")
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetBackendDirectory(serverOptions, "/opt/tritonserver/backends"), "setting backend directory")
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetRepoAgentDirectory(serverOptions, "/opt/tritonserver/repoagents"), "setting repository agent directory")
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetStrictModelConfig(serverOptions, true), "setting strict model configuration")
-    //  Initialise Server
-    FAIL_IF_ERR(TRITONSERVER_ServerNew(server, serverOptions), "creating server")
-
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsDelete(serverOptions), "deleting server options")
-  }
-
   waitTillReady(server)
   printServerMetadata(server)
   printModelMetadata(server)
 
-  val allocator = new TRITONSERVER_ResponseAllocator(null)
-  FAIL_IF_ERR(TRITONSERVER_ResponseAllocatorNew(allocator, responseAlloc, responseRelease, null), "creating response allocator")
-
-
-
+  val inputTensorName = "input__0"
+  val outputTensorName = "output__0"
   val inputData = Array(new FloatPointer(supportedFeatures.length.toLong))
   val inputDataPointer = inputData(0).getPointer(classOf[BytePointer])
   val inputDataSize = inputDataPointer.limit()
   val inputDataBase = inputDataPointer
 
 
-
   def getInferenceRequestObj(reqId: String): TRITONSERVER_InferenceRequest = {
     val irequest = new TRITONSERVER_InferenceRequest()
-
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestNew(irequest, server, modelName, modelVersion.toLong), "creating inference request")
-
     // TODO: Find better id
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestSetId(irequest, reqId), "setting ID for the request")
 
@@ -249,7 +249,6 @@ class TritonLightGbm(override val modelName: String, override val modelVersion: 
 
     val inputShape = Array(1L, supportedFeatures.length.toLong)
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestAddInput(irequest, inputTensorName, TRITONSERVER_TYPE_FP32, inputShape,inputShape.length), s"setting input $inputTensorName meta-data for the request")
-
 
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestAddRequestedOutput(irequest, outputTensorName), "requesting output probability for the request")
     irequest
@@ -308,51 +307,24 @@ class TritonLightGbm(override val modelName: String, override val modelVersion: 
 
   def predictSync(request: RequestSingle): Float = {
     val timeout = 5000.millis
-    //    val response = makePredictions(request, timeout.toNanos)
-    //    response
     Await.result(makePredictions(request,timeout.toNanos),timeout)
   }
 
-   def supportedFeatures: Seq[String] = {
-    modelString.split("\n").filter(_.startsWith("feature_names=")).head.split("=")(1).split(" ")
+  def supportedFeatures: Seq[String] = {
+  modelString.split("\n").filter(_.startsWith("feature_names=")).head.split("=")(1).split(" ")
   }
 
-   def getOutputSpaceSize: Int = {
+  def getOutputSpaceSize: Int = {
     modelString.split("\n").filter(_.startsWith("num_class=")).head.split("=")(1).toInt
-  }
-
-  def shutdown(): Unit = {
-    FAIL_IF_ERR(TRITONSERVER_ResponseAllocatorDelete(allocator), "deleting response allocator")
-    FAIL_IF_ERR(TRITONSERVER_ServerDelete(server), "deleting the server")
   }
 
 }
 
-class TritonTF(override val modelName: String, override val modelVersion: String, modelRepoPath: Path) extends TritonModel {
-  val server = new TRITONSERVER_Server(null);
-
-
-  timed("Server initialisation") {
-    val serverOptions = new TRITONSERVER_ServerOptions(null)
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsNew(serverOptions), "creating server options")
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetModelRepositoryPath(serverOptions, modelRepoPath.toString), "Setting model repo path")
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetLogVerbose(serverOptions, 0), "Setting verbose logging level")
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetBackendDirectory(serverOptions, "/opt/tritonserver/backends"), "setting backend directory")
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetRepoAgentDirectory(serverOptions, "/opt/tritonserver/repoagents"), "setting repository agent directory")
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetStrictModelConfig(serverOptions, false), "setting strict model configuration")
-    //  Initialise Server
-    FAIL_IF_ERR(TRITONSERVER_ServerNew(server, serverOptions), "creating server")
-
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsDelete(serverOptions), "deleting server options")
-  }
+class TritonTF(val modelName: String, val modelVersion: String, val modelRepoPath: Path) extends TritonModel {
 
   waitTillReady(server)
   printServerMetadata(server)
   printModelMetadata(server)
-
-  val allocator = new TRITONSERVER_ResponseAllocator(null)
-  FAIL_IF_ERR(TRITONSERVER_ResponseAllocatorNew(allocator, responseAlloc, responseRelease, null), "creating response allocator")
-
 
   val input1TensorName = "input_1"
   val input2TensorName = "input_2"
@@ -368,9 +340,7 @@ class TritonTF(override val modelName: String, override val modelVersion: String
 
   def getInferenceRequestObj(reqId: String): TRITONSERVER_InferenceRequest = {
     val irequest = new TRITONSERVER_InferenceRequest()
-
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestNew(irequest, server, modelName, modelVersion.toLong), "creating inference request")
-
     // TODO: Find better id
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestSetId(irequest, reqId), "setting ID for the request")
 
@@ -379,8 +349,6 @@ class TritonTF(override val modelName: String, override val modelVersion: String
     val inputShape = Array(1L, 1L)
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestAddInput(irequest, input1TensorName, inputDtype, inputShape,inputShape.length), s"setting input $input1TensorName meta-data for the request")
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestAddInput(irequest, input2TensorName, inputDtype, inputShape,inputShape.length), s"setting input $input1TensorName meta-data for the request")
-
-
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestAddRequestedOutput(irequest, outputTensorName), "requesting output probability for the request")
     irequest
 
@@ -430,40 +398,56 @@ class TritonTF(override val modelName: String, override val modelVersion: String
 
   def predictSync(request: RequestSingle): Float = {
     val timeout = 5000.millis
-    //    val response = makePredictions(request, timeout.toNanos)
-    //    response
     Await.result(makePredictions(request,timeout.toNanos),timeout)
   }
 
   def supportedFeatures: Seq[String] = {
     Seq("input_1","input_2")
   }
+
+  override def getOutputSpaceSize: Int = 1
 }
 
 object Debug extends App {
   println(s"Running Triton Test")
+  if (args.length == 0) {
+    println("You need to give the model to run. ")
+    System.exit(0)
+  }
+  val modelFormat = args(0)
+  if (modelFormat != "tf" || modelFormat != "lgbm"){
+    println(s"Invalid model format $modelFormat, Use 'tf' or 'lgbm'")
+    System.exit(0)
+  }
   val modelDir = Path.of("/var/lib/recommended/models/")
-  val modelName = "sample_tf"
-  val modelVersion = 1L
-  val model = new TritonTF(modelName, modelVersion.toString, modelDir)
+  val modelName = modelFormat match {
+    case "tf" => "sample_tf"
+    case "lgbm" => "sample_lightgbm"
+  }
+  val modelVersion = "1"
+  val model = modelName match {
+    case "sample_tf" => new TritonTF(modelName = modelName, modelVersion = modelVersion, modelRepoPath = modelDir)
+    case "sample_lightgbm" => new TritonLightGbm(modelName = modelName, modelVersion = modelVersion, modelRepoPath = modelDir)
+  }
+
+  val rand = new scala.util.Random
+
+//  val model = new TritonTF(modelName, modelVersion.toString, modelDir)
 
   val testCases = (0 until 100).map(i => {
-    RequestSingle(Map("input_1" -> Seq("2"), "input_2" -> Seq("5")))
+    RequestSingle(model.supportedFeatures.map(featureName => {
+      featureName -> Seq(rand.nextInt(10).toString)
+    }).toMap)
   })
   testCases.foreach(request => {
-    val (duration, result) = timed {
+    val result = model.timed("Doing inference") {
       model.predictSync(request)
     }
-    println(s"\n------Got prediction $result in ${duration.toMillis}ms")
+    println(s"\n------Got prediction $result for input ${request.params.take(4)}..")
   })
 
   println("Reached the end!!")
 
-  def timed[R](block: => R): (FiniteDuration, R) = {
-    val t0 = System.nanoTime()
-    val result = block
-    val duration = System.nanoTime() - t0
-    (duration.nano, result)
-  }
+
 
 }
