@@ -415,7 +415,7 @@ object Debug extends App {
     System.exit(0)
   }
   val modelFormat = args(0)
-  if (modelFormat != "tf" || modelFormat != "lgbm"){
+  if (modelFormat != "tf" && modelFormat != "lgbm"){
     println(s"Invalid model format $modelFormat, Use 'tf' or 'lgbm'")
     System.exit(0)
   }
