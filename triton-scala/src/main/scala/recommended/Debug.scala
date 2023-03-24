@@ -15,7 +15,7 @@ import scala.util.control.Breaks.{break, breakable}
 
 
 case class RequestSingle(params: Map[String, Seq[String]]){
-  def toString: String = {
+  override def toString: String = {
     params.take(4).map(kv => s"${kv._1}: ${kv._2.head}").mkString(",")
   }
 }
