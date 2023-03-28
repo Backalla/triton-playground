@@ -142,7 +142,7 @@ abstract class TritonModel {
         val probability = extractOutputFromResponse(response)
         val inferenceResponse = futures(userp)
         inferenceResponse.promise.tryComplete(Success(probability))
-        print(s"Forward pass took: ${Duration(System.nanoTime() - inferenceResponse.startTime, NANOSECONDS).toMillis}ms")
+        println(s"Forward pass took: ${Duration(System.nanoTime() - inferenceResponse.startTime, NANOSECONDS).toMillis}ms")
         FAIL_IF_ERR(TRITONSERVER_InferenceResponseDelete(response), "deleting inference response")
         futures.remove(userp)
       }
