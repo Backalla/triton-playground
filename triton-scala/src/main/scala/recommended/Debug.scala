@@ -16,7 +16,7 @@ import scala.util.control.Breaks.{break, breakable}
 
 case class RequestSingle(params: Map[String, Seq[String]]){
   override def toString: String = {
-    params.take(4).map(kv => s"${kv._1}:${kv._2.head}").mkString(", ")
+    params.take(4).map(kv => s"${kv._1}=${kv._2.head}").mkString(", ")
   }
 }
 
@@ -26,6 +26,8 @@ abstract class TritonModel {
   val modelName: String
   val modelVersion: String
   val modelRepoPath: Path
+  var startTime: Long = System.nanoTime()
+
   val live: Array[Boolean] = Array(false)
   def isLive: Boolean =  live(0)
   val ready: Array[Boolean] = Array(false)
@@ -40,19 +42,20 @@ abstract class TritonModel {
   val allocator = new TRITONSERVER_ResponseAllocator(null)
 
 
-  timed("Server initialisation") {
-    val serverOptions = new TRITONSERVER_ServerOptions(null)
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsNew(serverOptions), "creating server options")
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetModelRepositoryPath(serverOptions, modelRepoPath.toString), "Setting model repo path")
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetLogVerbose(serverOptions, 0), "Setting verbose logging level")
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetBackendDirectory(serverOptions, "/opt/tritonserver/backends"), "setting backend directory")
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetRepoAgentDirectory(serverOptions, "/opt/tritonserver/repoagents"), "setting repository agent directory")
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetStrictModelConfig(serverOptions, false), "setting strict model configuration")
-    //  Initialise Server
-    FAIL_IF_ERR(TRITONSERVER_ServerNew(server, serverOptions), "creating server")
-    FAIL_IF_ERR(TRITONSERVER_ServerOptionsDelete(serverOptions), "deleting server options")
-    FAIL_IF_ERR(TRITONSERVER_ResponseAllocatorNew(allocator, responseAlloc, responseRelease, null), "creating response allocator")
-  }
+  startTime = System.nanoTime()
+  val serverOptions = new TRITONSERVER_ServerOptions(null)
+  FAIL_IF_ERR(TRITONSERVER_ServerOptionsNew(serverOptions), "creating server options")
+  FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetModelRepositoryPath(serverOptions, modelRepoPath.toString), "Setting model repo path")
+  FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetLogVerbose(serverOptions, 0), "Setting verbose logging level")
+  FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetBackendDirectory(serverOptions, "/opt/tritonserver/backends"), "setting backend directory")
+  FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetRepoAgentDirectory(serverOptions, "/opt/tritonserver/repoagents"), "setting repository agent directory")
+  FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetStrictModelConfig(serverOptions, false), "setting strict model configuration")
+  //  Initialise Server
+  FAIL_IF_ERR(TRITONSERVER_ServerNew(server, serverOptions), "creating server")
+  FAIL_IF_ERR(TRITONSERVER_ServerOptionsDelete(serverOptions), "deleting server options")
+  FAIL_IF_ERR(TRITONSERVER_ResponseAllocatorNew(allocator, responseAlloc, responseRelease, null), "creating response allocator")
+  println(s"Starting the server took ${(System.nanoTime()-startTime).nano.toMillis}ms")
+
 
   val futures = new mutable.HashMap[Pointer, InferenceResponse]()
 
@@ -140,7 +143,7 @@ abstract class TritonModel {
         val inferenceResponse = futures(userp)
         inferenceResponse.promise.tryComplete(Success(probability))
         print(s"Forward pass took: ${Duration(System.nanoTime() - inferenceResponse.startTime, NANOSECONDS).toMillis}ms")
-//        FAIL_IF_ERR(TRITONSERVER_InferenceResponseDelete(response), "deleting inference response")
+        FAIL_IF_ERR(TRITONSERVER_InferenceResponseDelete(response), "deleting inference response")
         futures.remove(userp)
       }
     }
@@ -215,14 +218,6 @@ abstract class TritonModel {
     FAIL_IF_ERR(TRITONSERVER_ResponseAllocatorDelete(allocator), "deleting response allocator")
     FAIL_IF_ERR(TRITONSERVER_ServerDelete(server), "deleting the server")
   }
-
-  def timed[R](thing: String)(block: => R): R = {
-    val t0 = System.nanoTime()
-    val result = block
-    val duration = System.nanoTime() - t0
-    println(s"$thing took ${duration.nano.toMillis} ms")
-    result
-  }
 }
 
 class TritonLightGbm(val modelName: String, val modelVersion: String, val modelRepoPath: Path) extends TritonModel {
@@ -276,29 +271,32 @@ class TritonLightGbm(val modelName: String, val modelVersion: String, val modelR
 
   def makePredictions(request: RequestSingle, timeoutNano: Long): Future[Float] = {
     val retPromise =  Promise[Float]()
-    val irequest = timed("Initialising irequest") {
-      getInferenceRequestObj(randomUUID().toString)
-    }
+
+
+    startTime = System.nanoTime()
+    val irequest = getInferenceRequestObj(randomUUID().toString)
+    println(s"Creating request object took ${(System.nanoTime()-startTime).nano.toMillis}ms")
+
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestAppendInputData(irequest, inputTensorName,
       inputDataBase,inputDataSize,requested_memory_type,0),s"assigning $inputTensorName data")
 
-    timed("Creating input data") {
-      val inputRow = supportedFeatures.map(
-        featName => try {
-          val values = request.params.get(featName)
-          if (values.isEmpty || values.get.isEmpty || values.get.head == null) {
-            Float.NaN
-          } else {
-            values.get.head.toFloat
-          }
-        } catch {
-          case e: Exception =>
-            throw new IllegalArgumentException(s"Invalid value '${request.params.get(featName).map(_.head)}' for feature '$featName': ${e.getClass.getSimpleName}")
+    startTime = System.nanoTime()
+    val inputRow = supportedFeatures.map(
+      featName => try {
+        val values = request.params.get(featName)
+        if (values.isEmpty || values.get.isEmpty || values.get.head == null) {
+          Float.NaN
+        } else {
+          values.get.head.toFloat
         }
-      )
+      } catch {
+        case e: Exception =>
+          throw new IllegalArgumentException(s"Invalid value '${request.params.get(featName).map(_.head)}' for feature '$featName': ${e.getClass.getSimpleName}")
+      }
+    )
+    addInputData(inputRow)
+    println(s"Populating input data took ${(System.nanoTime()-startTime).nano.toMillis}ms")
 
-      addInputData(inputRow)
-    }
     val inferenceResponse = InferenceResponse(retPromise,request)
 
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestSetResponseCallback(irequest, allocator, null, inferResponseComplete, irequest), "setting response callback")
@@ -365,31 +363,32 @@ class TritonTF(val modelName: String, val modelVersion: String, val modelRepoPat
 
   def makePredictions(request: RequestSingle, timeoutNano: Long): Future[Float] = {
     val retPromise =  Promise[Float]()
-    val irequest = timed("Initialising irequest") {
-      getInferenceRequestObj(randomUUID().toString)
-    }
+    startTime = System.nanoTime()
+    val irequest = getInferenceRequestObj(randomUUID().toString)
+    println(s"Creating request object took ${(System.nanoTime()-startTime).nano.toMillis}ms")
+
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestAppendInputData(irequest, input1TensorName,
       input1DataBase,inputDataSize,requested_memory_type,0),s"assigning $input1TensorName data")
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestAppendInputData(irequest, input2TensorName,
       input2DataBase,inputDataSize,requested_memory_type,0),s"assigning $input2TensorName data")
 
-    timed("Creating input data") {
-      val inputRow = supportedFeatures.map(
-        featName => try {
-          val values = request.params.get(featName)
-          if (values.isEmpty || values.get.isEmpty || values.get.head == null) {
-            42
-          } else {
-            values.get.head.toInt
-          }
-        } catch {
-          case e: Exception =>
-            throw new IllegalArgumentException(s"Invalid value '${request.params.get(featName).map(_.head)}' for feature '$featName': ${e.getClass.getSimpleName}")
+    startTime = System.nanoTime()
+    val inputRow = supportedFeatures.map(
+      featName => try {
+        val values = request.params.get(featName)
+        if (values.isEmpty || values.get.isEmpty || values.get.head == null) {
+          42
+        } else {
+          values.get.head.toInt
         }
-      )
+      } catch {
+        case e: Exception =>
+          throw new IllegalArgumentException(s"Invalid value '${request.params.get(featName).map(_.head)}' for feature '$featName': ${e.getClass.getSimpleName}")
+      }
+    )
+    addInputData(inputRow)
+    println(s"Populating input data took ${(System.nanoTime()-startTime).nano.toMillis}ms")
 
-      addInputData(inputRow)
-    }
     val inferenceResponse = InferenceResponse(retPromise,request)
 
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestSetResponseCallback(irequest, allocator, null, inferResponseComplete, irequest), "setting response callback")
@@ -414,6 +413,7 @@ class TritonTF(val modelName: String, val modelVersion: String, val modelRepoPat
 
 object Debug extends App {
   println(s"Running Triton Test")
+  var startTime = System.nanoTime()
   if (args.length == 0) {
     println("You need to give the model to run. ")
     System.exit(0)
@@ -436,17 +436,18 @@ object Debug extends App {
 
   val rand = new scala.util.Random
 
-//  val model = new TritonTF(modelName, modelVersion.toString, modelDir)
-
+  startTime = System.nanoTime()
   val testCases = (0 until 100).map(i => {
     RequestSingle(model.supportedFeatures.map(featureName => {
       featureName -> Seq(rand.nextInt(10).toString)
     }).toMap)
   })
+  println(s"Creating random test data took ${(System.nanoTime()-startTime).nano.toMillis}ms")
+
   testCases.foreach(request => {
-    val result = model.timed("Doing inference") {
-      model.predictSync(request)
-    }
+    startTime = System.nanoTime()
+    val result = model.predictSync(request)
+    println(s"model.predictSync took ${(System.nanoTime()-startTime).nano.toMillis}ms")
     println(s"\n------Got prediction $result for input ${request.toString}..")
   })
 
