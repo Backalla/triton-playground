@@ -226,6 +226,10 @@ class TritonLightGbm(val modelName: String, val modelVersion: String, val modelR
   val modelConfigPath = modelRepoPath.resolve(s"$modelName/config.pbtxt")
   val modelString = getModelString
 
+  val supportedFeatures: Seq[String] = {
+    modelString.split("\n").filter(_.startsWith("feature_names=")).head.split("=")(1).split(" ")
+  }
+
   waitTillReady(server)
   printServerMetadata(server)
   printModelMetadata(server)
@@ -312,9 +316,7 @@ class TritonLightGbm(val modelName: String, val modelVersion: String, val modelR
     Await.result(makePredictions(request,timeout.toNanos),timeout)
   }
 
-  def supportedFeatures: Seq[String] = {
-  modelString.split("\n").filter(_.startsWith("feature_names=")).head.split("=")(1).split(" ")
-  }
+
 
   def getOutputSpaceSize: Int = {
     modelString.split("\n").filter(_.startsWith("num_class=")).head.split("=")(1).toInt
