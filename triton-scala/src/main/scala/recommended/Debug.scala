@@ -277,14 +277,14 @@ class TritonLightGbm(val modelName: String, val modelVersion: String, val modelR
     val retPromise =  Promise[Float]()
 
 
-    startTime = System.nanoTime()
+//    startTime = System.nanoTime()
     val irequest = getInferenceRequestObj(randomUUID().toString)
-    println(s"Creating request object took ${(System.nanoTime()-startTime).nano.toMillis}ms")
+//    println(s"Creating request object took ${(System.nanoTime()-startTime).nano.toMillis}ms")
 
     FAIL_IF_ERR(TRITONSERVER_InferenceRequestAppendInputData(irequest, inputTensorName,
       inputDataBase,inputDataSize,requested_memory_type,0),s"assigning $inputTensorName data")
 
-    startTime = System.nanoTime()
+//    startTime = System.nanoTime()
     val inputRow = supportedFeatures.map(
       featName => try {
         val values = request.params.get(featName)
@@ -299,7 +299,7 @@ class TritonLightGbm(val modelName: String, val modelVersion: String, val modelR
       }
     )
     addInputData(inputRow)
-    println(s"Populating input data took ${(System.nanoTime()-startTime).nano.toMillis}ms")
+//    println(s"Populating input data took ${(System.nanoTime()-startTime).nano.toMillis}ms")
 
     val inferenceResponse = InferenceResponse(retPromise,request)
 
