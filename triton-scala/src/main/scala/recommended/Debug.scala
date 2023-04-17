@@ -46,7 +46,7 @@ abstract class TritonModel {
   val serverOptions = new TRITONSERVER_ServerOptions(null)
   FAIL_IF_ERR(TRITONSERVER_ServerOptionsNew(serverOptions), "creating server options")
   FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetModelRepositoryPath(serverOptions, modelRepoPath.toString), "Setting model repo path")
-  FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetLogVerbose(serverOptions, 0), "Setting verbose logging level")
+  FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetLogVerbose(serverOptions, 1), "Setting verbose logging level")
   FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetBackendDirectory(serverOptions, "/opt/tritonserver/backends"), "setting backend directory")
   FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetRepoAgentDirectory(serverOptions, "/opt/tritonserver/repoagents"), "setting repository agent directory")
   FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetStrictModelConfig(serverOptions, true), "setting strict model configuration")
@@ -113,7 +113,7 @@ abstract class TritonModel {
 
   class InferRequestComplete extends TRITONSERVER_InferenceRequestReleaseFn_t {
     override def call(request: TRITONSERVER_InferenceRequest, flags: Int, userp: Pointer): Unit = {
-      FAIL_IF_ERR(TRITONSERVER_InferenceRequestDelete(request), "deleting inference request")
+//      FAIL_IF_ERR(TRITONSERVER_InferenceRequestDelete(request), "deleting inference request")
     }
   }
 
@@ -337,13 +337,8 @@ class TritonTF(val modelName: String, val modelVersion: String, val modelRepoPat
   val input2TensorName = "input_2"
   val outputTensorName = "output_1"
   val inputDtype = TRITONSERVER_TYPE_INT64
-  val input1Data = Array(new IntPointer(1L))
-  val input2Data = Array(new IntPointer(1L))
-  val input1DataPointer = input1Data(0).getPointer(classOf[BytePointer])
-  val input2DataPointer = input2Data(0).getPointer(classOf[BytePointer])
-  val inputDataSize = input1DataPointer.limit()
-  val input1DataBase = input1DataPointer
-  val input2DataBase = input2DataPointer
+
+
 
   def getInferenceRequestObj(reqId: String): TRITONSERVER_InferenceRequest = {
     val irequest = new TRITONSERVER_InferenceRequest()
@@ -361,10 +356,10 @@ class TritonTF(val modelName: String, val modelVersion: String, val modelRepoPat
 
   }
 
-  def addInputData(inputRow: Seq[Int]): Unit = {
-    input1Data(0).put(inputRow(0))
-    input2Data(0).put(inputRow(1))
-  }
+//  def addInputData(inputRow: Seq[Int]): Unit = {
+//    input1Data(0).put(inputRow(0))
+//    input2Data(0).put(inputRow(1))
+//  }
 
   def makePredictions(request: RequestSingle, timeoutNano: Long): Future[Float] = {
     val retPromise =  Promise[Float]()
@@ -372,10 +367,15 @@ class TritonTF(val modelName: String, val modelVersion: String, val modelRepoPat
     val irequest = getInferenceRequestObj(randomUUID().toString)
     println(s"Creating request object took ${(System.nanoTime()-startTime).nano.toMillis}ms")
 
-    FAIL_IF_ERR(TRITONSERVER_InferenceRequestAppendInputData(irequest, input1TensorName,
-      input1DataBase,inputDataSize,requested_memory_type,0),s"assigning $input1TensorName data")
-    FAIL_IF_ERR(TRITONSERVER_InferenceRequestAppendInputData(irequest, input2TensorName,
-      input2DataBase,inputDataSize,requested_memory_type,0),s"assigning $input2TensorName data")
+    val input1Data = Array(new IntPointer(1L))
+    val input2Data = Array(new IntPointer(1L))
+    val input1DataPointer = input1Data(0).getPointer(classOf[BytePointer])
+    val input2DataPointer = input2Data(0).getPointer(classOf[BytePointer])
+    val inputDataSize = input1DataPointer.limit()
+    val input1DataBase = input1DataPointer
+    val input2DataBase = input2DataPointer
+
+
 
     startTime = System.nanoTime()
     val inputRow = supportedFeatures.map(
@@ -391,7 +391,14 @@ class TritonTF(val modelName: String, val modelVersion: String, val modelRepoPat
           throw new IllegalArgumentException(s"Invalid value '${request.params.get(featName).map(_.head)}' for feature '$featName': ${e.getClass.getSimpleName}")
       }
     )
-    addInputData(inputRow)
+//    addInputData(inputRow)
+    input1Data(0).put(inputRow(0))
+    input2Data(0).put(inputRow(1))
+
+    FAIL_IF_ERR(TRITONSERVER_InferenceRequestAppendInputData(irequest, input1TensorName,
+      input1DataBase,inputDataSize,requested_memory_type,0),s"assigning $input1TensorName data")
+    FAIL_IF_ERR(TRITONSERVER_InferenceRequestAppendInputData(irequest, input2TensorName,
+      input2DataBase,inputDataSize,requested_memory_type,0),s"assigning $input2TensorName data")
     println(s"Populating input data took ${(System.nanoTime()-startTime).nano.toMillis}ms")
 
     val inferenceResponse = InferenceResponse(retPromise,request)
