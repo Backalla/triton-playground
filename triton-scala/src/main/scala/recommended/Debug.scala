@@ -46,7 +46,7 @@ abstract class TritonModel {
   val serverOptions = new TRITONSERVER_ServerOptions(null)
   FAIL_IF_ERR(TRITONSERVER_ServerOptionsNew(serverOptions), "creating server options")
   FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetModelRepositoryPath(serverOptions, modelRepoPath.toString), "Setting model repo path")
-  FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetLogVerbose(serverOptions, 1), "Setting verbose logging level")
+  FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetLogVerbose(serverOptions, 0), "Setting verbose logging level")
   FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetBackendDirectory(serverOptions, "/opt/tritonserver/backends"), "setting backend directory")
   FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetRepoAgentDirectory(serverOptions, "/opt/tritonserver/repoagents"), "setting repository agent directory")
   FAIL_IF_ERR(TRITONSERVER_ServerOptionsSetStrictModelConfig(serverOptions, true), "setting strict model configuration")
