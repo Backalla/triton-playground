@@ -127,6 +127,8 @@ abstract class TritonModel {
     val memory_type = new IntPointer(1L)
     val memory_type_id = new LongPointer(1)
     val userp = new Pointer()
+    val outputCount = new IntPointer(1)
+    FAIL_IF_ERR(TRITONSERVER_InferenceResponseOutputCount(response, outputCount), "getting number of response outputs")
 
     FAIL_IF_ERR(
       TRITONSERVER_InferenceResponseOutput(
@@ -135,7 +137,7 @@ abstract class TritonModel {
       "getting output info")
 //    val odata = new BytePointer(byte_size.get())
 //    odata.put(base.limit(byte_size.get()))
-    println(s"Byte Size: ${byte_size.get()}, Base: ${base.get()}, Cname: ${cname.getString()} dtype: ${datatype.get()}, shape: ${shape.get()}")
+    println(s"Count: ${outputCount.get()}, Byte Size: ${byte_size.get()}, Base: ${base.get()}, Cname: ${cname.getString()} dtype: ${datatype.get()}, shape: ${shape.get()}")
 //    base.limit(byte_size.get()).get()
     base.get()
   }
