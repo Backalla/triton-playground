@@ -133,6 +133,8 @@ abstract class TritonModel {
         response, 0, cname, datatype, shape, dim_count, base,
         byte_size, memory_type, memory_type_id, userp),
       "getting output info")
+
+    println(s"Byte Size: ${byte_size.get()}, Base: ${base.get()}, Cname: $cname, dtype: $datatype, shape: $shape")
     base.limit(byte_size.get()).get()
   }
 
