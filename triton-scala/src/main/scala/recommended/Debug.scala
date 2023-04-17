@@ -127,7 +127,7 @@ abstract class TritonModel {
     val memory_type = new IntPointer(1L)
     val memory_type_id = new LongPointer(1)
     val userp = new Pointer()
-    val outputCount = new IntPointer(1)
+    val outputCount = new IntPointer(1L)
     FAIL_IF_ERR(TRITONSERVER_InferenceResponseOutputCount(response, outputCount), "getting number of response outputs")
 
     FAIL_IF_ERR(
