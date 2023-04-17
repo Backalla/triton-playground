@@ -122,7 +122,7 @@ abstract class TritonModel {
     val datatype = new IntPointer(1L)
     val shape = new LongPointer()
     val dim_count = new LongPointer(1)
-    val base = new Pointer()
+    val base = new FloatPointer(4)
     val byte_size = new SizeTPointer(1)
     val memory_type = new IntPointer(1L)
     val memory_type_id = new LongPointer(1)
@@ -133,11 +133,11 @@ abstract class TritonModel {
         response, 0, cname, datatype, shape, dim_count, base,
         byte_size, memory_type, memory_type_id, userp),
       "getting output info")
-    val odata = new BytePointer(byte_size.get())
-    odata.put(base.limit(byte_size.get()))
-    println(s"Byte Size: ${byte_size.get()}, Base: ${odata.get()}, Cname: ${cname.getString()} dtype: ${datatype.get()}, shape: ${shape.get()}")
+//    val odata = new BytePointer(byte_size.get())
+//    odata.put(base.limit(byte_size.get()))
+    println(s"Byte Size: ${byte_size.get()}, Base: ${base.get()}, Cname: ${cname.getString()} dtype: ${datatype.get()}, shape: ${shape.get()}")
 //    base.limit(byte_size.get()).get()
-    new FloatPointer(odata).get()
+    base.get()
   }
 
   class InferResponseComplete extends TRITONSERVER_InferenceResponseCompleteFn_t {
