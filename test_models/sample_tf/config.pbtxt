@@ -1,0 +1,29 @@
+name: "sample_tf"
+platform: "tensorflow_savedmodel"
+max_batch_size: 2048
+input [
+  {
+    name: "input_1"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
+  },
+  {
+    name: "input_2"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
+  }
+]
+output [
+  {
+    name: "output_1"
+    data_type: TYPE_FP32
+    dims: [ 1 ]
+  }
+]
+instance_group [
+ { 
+    count: 1
+    kind: KIND_CPU 
+ }
+
+]
